@@ -9,6 +9,7 @@ import requests
 from pprint import pprint
 from itertools import tee, zip_longest
 from collections import defaultdict
+import os
 
 EHP_PAGES = {
     "main": "https://templeosrs.com/efficiency/skilling.php",
@@ -20,11 +21,63 @@ EHP_PAGES = {
 EHB_PAGES = {
     "main": "https://templeosrs.com/efficiency/pvm.php",
     "ironman": "https://templeosrs.com/efficiency/pvm.php?ehb=im",
+    "f2p": "https://templeosrs.com/efficiency/pvm.php",
+    "lvl3": "https://templeosrs.com/efficiency/pvm.php",
 }
 
 MISC_PAGES = {"main": "https://templeosrs.com/efficiency/misc.php"}
 
 PAGES = {"ehp": EHP_PAGES, "ehb": EHB_PAGES, "misc": MISC_PAGES}
+
+
+# class WomEncoder(json.JSONEncoder):
+#     def default(self, e):
+#         if isinstance(e, CoolFloat):
+#             return f"{e.val:g}"
+#         elif isinstance(e, CoolInt):
+#             return f"{e.val:_}"
+#         else:
+#             return json.JSONEncoder.default(self, e)
+
+
+class WomFormatDumper:
+    "This is stupid, have prettier do the proper formatting"
+
+    @staticmethod
+    def dumps(data, depth=0, indent=2):
+        if data is None:
+            return "null"
+        elif isinstance(data, list):
+            if not data:
+                return "[]"
+            return (
+                " " * depth
+                + "[\n"
+                + ",\n".join([WomFormatDumper.dumps(d, depth + indent) for d in data])
+                + " " * depth
+                + "\n]"
+            )
+        elif isinstance(data, dict):
+            return (
+                " " * depth
+                + "{\n"
+                + " " * (depth + indent)
+                + f",\n{' '*(depth+indent)}".join(
+                    key + ": " + WomFormatDumper.dumps(val, depth + indent)
+                    for key, val in data.items()
+                )
+                + "\n"
+                + " " * depth
+                + "}"
+            )
+        elif isinstance(data, bool):
+            return "true" if data else "false"
+        elif isinstance(data, int):
+            return f"{data:_}"
+        elif isinstance(data, float):
+            return f"{data:g}"
+        elif isinstance(data, str):
+            return "'" + data.replace("'", "\\'") + "'"
 
 
 @dataclass
@@ -89,9 +142,12 @@ def pairwise(iterable):
 
 
 def save_to(path, info):
+    dump = WomFormatDumper.dumps(info)
+
     with open(path, "w") as file:
         file.write("export default\n")
-        json.dump(info, file, indent=2)
+        file.write(dump)
+        file.write(";")
 
 
 def dir_path(string):
@@ -162,7 +218,6 @@ def parse_ehb_page(raw):
         name = boss.find("img").get("title").lower().replace(" ", "_")
         rate = float(killph.getText())
         entries.append(TempleEhbEntry(name, rate))
-        print(name, rate)
     return entries
 
 
@@ -171,7 +226,9 @@ def parse_misc_page(raw):
 
 
 def convert_ehp_to_wom_format(entry, entries):
-    d = {"skill": entry.name, "methods": [], "bonuses": []}
+    # Wom uses runecarfting :/
+    name = entry.name if entry.name != "runecraft" else "runecrafting"
+    d = {"skill": name, "methods": [], "bonuses": []}
     sieve = defaultdict(list)
     saved_start = None
 
@@ -218,7 +275,7 @@ def convert_ehp_to_wom_format(entry, entries):
 
 
 def convert_ehb_to_wom_format(entry):
-    pass
+    return {"boss": entry.name.replace("-", "_"), "rate": entry.rate}
 
 
 def main():
@@ -230,12 +287,16 @@ def main():
             wom_formatted = [
                 convert_ehp_to_wom_format(entry, entries) for entry in entries
             ]
-            save_to(f"{name}.ehp.ts", wom_formatted)
+            save_to(os.path.join(args["path"], f"{name}.ehp.ts"), wom_formatted)
 
-    elif args[category] == "ehb":
-        pass
+    elif args["category"] == "ehb":
+        for name, url in EHB_PAGES.items():
+            raw = fetch_page(url)
+            entries = parse_ehb_page(raw)
+            wom_formatted = [convert_ehb_to_wom_format(entry) for entry in entries]
+            save_to(os.path.join(args["path"], f"{name}.ehb.ts"), wom_formatted)
 
-    elif args[category] == "misc":
+    elif args["category"] == "misc":
         pass
 
     elif args["all"]:
