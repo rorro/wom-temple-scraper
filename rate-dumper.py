@@ -6,7 +6,6 @@ import re
 from dataclasses import dataclass, field
 from typing import List
 import requests
-from pprint import pprint
 from itertools import tee, zip_longest
 from collections import defaultdict
 import os
@@ -21,30 +20,22 @@ EHP_PAGES = {
 EHB_PAGES = {
     "main": "https://templeosrs.com/efficiency/pvm.php",
     "ironman": "https://templeosrs.com/efficiency/pvm.php?ehb=im",
-    "f2p": "https://templeosrs.com/efficiency/pvm.php",
-    "lvl3": "https://templeosrs.com/efficiency/pvm.php",
 }
 
 MISC_PAGES = {"main": "https://templeosrs.com/efficiency/misc.php"}
 
-PAGES = {"ehp": EHP_PAGES, "ehb": EHB_PAGES, "misc": MISC_PAGES}
-
-
-# class WomEncoder(json.JSONEncoder):
-#     def default(self, e):
-#         if isinstance(e, CoolFloat):
-#             return f"{e.val:g}"
-#         elif isinstance(e, CoolInt):
-#             return f"{e.val:_}"
-#         else:
-#             return json.JSONEncoder.default(self, e)
-
 
 class WomFormatDumper:
-    "This is stupid, have prettier do the proper formatting"
+    """
+    This is stupid, but we can't just simply dump this to json
+    because it's some weird ts format
+    This outputs a rough outline that we have prettier handle later on
+    """
 
     @staticmethod
-    def dumps(data, depth=0, indent=2):
+    def dumps(data, depth=0, indent=2, move=True):
+        if not move:
+            depth = 0
         if data is None:
             return "null"
         elif isinstance(data, list):
@@ -141,8 +132,12 @@ def pairwise(iterable):
     return zip_longest(a, b)
 
 
-def save_to(path, info):
-    dump = WomFormatDumper.dumps(info)
+def save_to(path, info, move=True):
+    dump = WomFormatDumper.dumps(info, move=move)
+    if not move:
+        # The lack of newlines makes prettier format this into a
+        # more compact format
+        dump = dump.replace("\n", "")
 
     with open(path, "w") as file:
         file.write("export default\n")
@@ -163,7 +158,7 @@ def get_args():
         "category",
         action="store",
         help="the rate category to dump",
-        choices=list(PAGES.keys()) + ["all"],
+        choices=list(PAGES.keys()),
     )
     parser.add_argument("path", action="store", help="the path to the output folder")
 
@@ -226,7 +221,7 @@ def parse_misc_page(raw):
 
 
 def convert_ehp_to_wom_format(entry, entries):
-    # Wom uses runecarfting :/
+    # Wom uses runecrafting :/
     name = entry.name if entry.name != "runecraft" else "runecrafting"
     d = {"skill": name, "methods": [], "bonuses": []}
     sieve = defaultdict(list)
@@ -278,29 +273,89 @@ def convert_ehb_to_wom_format(entry):
     return {"boss": entry.name.replace("-", "_"), "rate": entry.rate}
 
 
+def account_for_not_updated_iron_ehb(main_entries, iron_entries):
+    modified_iron_entries = []
+    for entry in iron_entries:
+        mainrate = [e.rate for e in main_entries if e.name == entry.name]
+        if not mainrate:
+            modified_iron_entries.append(entry)
+            continue
+        mainrate = mainrate[0]
+
+        # Iron rate is always lower or equal to main rate since it's not really updated as well
+        modified_iron_entries.append(
+            TempleEhbEntry(entry.name, min(entry.rate, mainrate))
+        )
+    return modified_iron_entries
+
+
+def convert_misc_to_wom_format(entry):
+    return {"metric": entry.name.replace("-", "_"), "rate": entry.rate}
+
+
+def convert_format(converter, entries):
+    return [converter(entry) for entry in entries]
+
+
+def dump_ehb():
+    # Grab rates for main and iron simultaneously since wee need to compare them
+    # Only main rates are updated
+    mainraw = fetch_page(EHB_PAGES["main"])
+    main_entries = parse_ehb_page(mainraw)
+    wom_formatted_main = convert_format(convert_ehb_to_wom_format, main_entries)
+    save_to(os.path.join(args["path"], f"main.ehb.ts"), wom_formatted_main, move=False)
+
+    ironraw = fetch_page(EHB_PAGES["ironman"])
+    iron_entries = parse_ehb_page(ironraw)
+
+    # Correct outdated rates because they are not actively used
+    modified_iron_entries = account_for_not_updated_iron_ehb(main_entries, iron_entries)
+
+    wom_formatted_iron = convert_format(
+        convert_ehb_to_wom_format, modified_iron_entries
+    )
+    save_to(
+        os.path.join(args["path"], f"ironman.ehb.ts"), wom_formatted_iron, move=False
+    )
+
+    # Zero out any rates for f2p or lvl3
+    lvl3_and_f2p_entries = [TempleEhbEntry(e.name, 0) for e in main_entries]
+    wom_formatted_lvl3_and_f2p = convert_format(
+        convert_ehb_to_wom_format, lvl3_and_f2p_entries
+    )
+    for name in ["lvl3", "f2p"]:
+        save_to(
+            os.path.join(args["path"], f"{name}.ehb.ts"),
+            wom_formatted_lvl3_and_f2p,
+            move=False,
+        )
+
+
+def dump_ehp():
+    for name, url in EHP_PAGES.items():
+        print(f"Dumping {name} EHP...")
+        raw = fetch_page(url)
+        entries = parse_ehp_page(raw)
+        wom_formatted = convert_format(convert_ehp_to_wom_format, entries)
+        save_to(os.path.join(args["path"], f"{name}.ehp.ts"), wom_formatted)
+
+
+def dump_misc():
+    main_raw = fetch_page(MISC_PAGES["main"])
+    main_entries = parse_misc_page(main_raw)
+    wom_formatted = convert_format(convert_misc_to_wom_format, main_entries)
+    for name in EHP_PAGES.keys():
+        save_to(os.path.join(args["path"], f"{name}.ehp.ts"), wom_formatted, move=False)
+
+
 def main():
     args = get_args()
     if args["category"] == "ehp":
-        for name, url in EHP_PAGES.items():
-            raw = fetch_page(url)
-            entries = parse_ehp_page(raw)
-            wom_formatted = [
-                convert_ehp_to_wom_format(entry, entries) for entry in entries
-            ]
-            save_to(os.path.join(args["path"], f"{name}.ehp.ts"), wom_formatted)
-
+        dump_ehp()
     elif args["category"] == "ehb":
-        for name, url in EHB_PAGES.items():
-            raw = fetch_page(url)
-            entries = parse_ehb_page(raw)
-            wom_formatted = [convert_ehb_to_wom_format(entry) for entry in entries]
-            save_to(os.path.join(args["path"], f"{name}.ehb.ts"), wom_formatted)
-
+        dump_ehb()
     elif args["category"] == "misc":
-        pass
-
-    elif args["all"]:
-        pass
+        dump_misc()
     else:
         print("Invalid category")
 
