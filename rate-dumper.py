@@ -9,6 +9,7 @@ import requests
 from itertools import tee, zip_longest
 from collections import defaultdict
 import os
+from inspect import signature
 
 EHP_PAGES = {
     "main": "https://templeosrs.com/efficiency/skilling.php",
@@ -158,7 +159,7 @@ def get_args():
         "category",
         action="store",
         help="the rate category to dump",
-        choices=list(PAGES.keys()),
+        choices=["ehp", "ehb", "misc"],
     )
     parser.add_argument("path", action="store", help="the path to the output folder")
 
@@ -294,16 +295,20 @@ def convert_misc_to_wom_format(entry):
 
 
 def convert_format(converter, entries):
+    sig = signature(converter)
+
+    if len(sig.parameters) == 2:
+        return [converter(entry, entries) for entry in entries]
     return [converter(entry) for entry in entries]
 
 
-def dump_ehb():
+def dump_ehb(path):
     # Grab rates for main and iron simultaneously since wee need to compare them
     # Only main rates are updated
     mainraw = fetch_page(EHB_PAGES["main"])
     main_entries = parse_ehb_page(mainraw)
     wom_formatted_main = convert_format(convert_ehb_to_wom_format, main_entries)
-    save_to(os.path.join(args["path"], f"main.ehb.ts"), wom_formatted_main, move=False)
+    save_to(os.path.join(path, f"main.ehb.ts"), wom_formatted_main, move=False)
 
     ironraw = fetch_page(EHB_PAGES["ironman"])
     iron_entries = parse_ehb_page(ironraw)
@@ -314,9 +319,7 @@ def dump_ehb():
     wom_formatted_iron = convert_format(
         convert_ehb_to_wom_format, modified_iron_entries
     )
-    save_to(
-        os.path.join(args["path"], f"ironman.ehb.ts"), wom_formatted_iron, move=False
-    )
+    save_to(os.path.join(path, f"ironman.ehb.ts"), wom_formatted_iron, move=False)
 
     # Zero out any rates for f2p or lvl3
     lvl3_and_f2p_entries = [TempleEhbEntry(e.name, 0) for e in main_entries]
@@ -325,37 +328,39 @@ def dump_ehb():
     )
     for name in ["lvl3", "f2p"]:
         save_to(
-            os.path.join(args["path"], f"{name}.ehb.ts"),
-            wom_formatted_lvl3_and_f2p,
-            move=False,
+            os.path.join(path, f"{name}.ehb.ts"), wom_formatted_lvl3_and_f2p, move=False
         )
 
 
-def dump_ehp():
+def dump_ehp(path):
     for name, url in EHP_PAGES.items():
         print(f"Dumping {name} EHP...")
         raw = fetch_page(url)
         entries = parse_ehp_page(raw)
         wom_formatted = convert_format(convert_ehp_to_wom_format, entries)
-        save_to(os.path.join(args["path"], f"{name}.ehp.ts"), wom_formatted)
+        save_to(os.path.join(path, f"{name}.ehp.ts"), wom_formatted)
 
 
-def dump_misc():
+def dump_misc(path):
     main_raw = fetch_page(MISC_PAGES["main"])
     main_entries = parse_misc_page(main_raw)
     wom_formatted = convert_format(convert_misc_to_wom_format, main_entries)
     for name in EHP_PAGES.keys():
-        save_to(os.path.join(args["path"], f"{name}.ehp.ts"), wom_formatted, move=False)
+        save_to(os.path.join(path, f"{name}.ehp.ts"), wom_formatted, move=False)
 
 
 def main():
     args = get_args()
+    path = args["path"]
     if args["category"] == "ehp":
-        dump_ehp()
+        print("Dumping ehp...")
+        dump_ehp(path)
     elif args["category"] == "ehb":
-        dump_ehb()
+        print("Dumping ehb...")
+        dump_ehb(path)
     elif args["category"] == "misc":
-        dump_misc()
+        print("Dumping misc...")
+        dump_misc(path)
     else:
         print("Invalid category")
 

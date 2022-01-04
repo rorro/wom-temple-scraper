@@ -5,4 +5,4 @@ python rate-dumper.py ehb ~/personal_projects/wise-old-man/server/src/api/module
 pushd ~/personal_projects/wise-old-man/server/src/api/modules/efficiency/configs
 npx prettier --write **/*.ts
 popd
-
+deactivate
