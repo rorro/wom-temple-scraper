@@ -10,10 +10,12 @@ from itertools import tee, zip_longest
 from collections import defaultdict
 import os
 from inspect import signature
+from pprint import pprint
 
 EHP_PAGES = {
     "main": "https://templeosrs.com/efficiency/skilling.php",
     "ironman": "https://templeosrs.com/efficiency/skilling.php?ehp=im",
+    "uim": "https://templeosrs.com/efficiency/skilling.php?ehp=uim",
     "f2p": "https://templeosrs.com/efficiency/skilling.php?ehp=f2p",
     "lvl3": "https://templeosrs.com/efficiency/skilling.php?ehp=lvl3",
 }
@@ -181,6 +183,8 @@ def parse_ehp_page(raw):
     entries = []
 
     # First table is the summary table
+    summary = parse_summary_table(tables[0])
+
     for table in tables[1:]:
 
         if table.find("div", {"class": "news-post-container"}):
@@ -199,8 +203,22 @@ def parse_ehp_page(raw):
         entry = TempleEhpEntry(name, start_xp)
         entry.parse_table(table)
         entries.append(entry)
-    return entries
+    return summary, entries
 
+def parse_summary_table(t):
+    summ  = {}
+    for row in t.findAll("tr")[1:]: #skip the table header, we know what is in the table
+        img, xp_left, amount_bxp, hours = row.findAll("td")
+        skill = extract_skill_from_icon_path(img.find("img").get("src"))
+        xp_left = to_int(xp_left.getText())
+        amount_bxp = to_int(amount_bxp.getText())
+        hours = float(hours.getText().replace(",",""))
+        summ[skill] = {"xpLeft" : xp_left, "amountBxp": amount_bxp, "hours": hours}
+    return summ
+
+def extract_skill_from_icon_path(path):
+    n = path.split("_")[-1].split(".")[0].lower()
+    return n if n != "runecraft" else "runecrafting"
 
 def parse_ehb_page(raw):
     soup = BeautifulSoup(raw, "html.parser")
@@ -212,14 +230,25 @@ def parse_ehb_page(raw):
             continue
         boss, killph, pet_rate, avg_pet_ehb = data
         name = boss.find("img").get("title").lower().replace(" ", "_")
+        name = convert_to_wom_name(name)
         rate = float(killph.getText())
         entries.append(TempleEhbEntry(name, rate))
     return entries
 
+def convert_to_wom_name(name):
+    if name == "the_nightmare":
+        return "nightmare"
+    if name == "theatre_of_blood_challenge_mode":
+        return "theatre_of_blood_hard_mode"
+    return name
 
 def parse_misc_page(raw):
     return parse_ehb_page(raw)
 
+def capitalize_first_letter(s):
+    if s:
+        return s[0].upper() + s[1:]
+    return s
 
 def convert_ehp_to_wom_format(entry, entries):
     # Wom uses runecrafting :/
@@ -233,7 +262,7 @@ def convert_ehp_to_wom_format(entry, entries):
             {
                 "startExp": method.start_xp,
                 "rate": method.rate,
-                "description": method.description,
+                "description": capitalize_first_letter(method.description),
             }
         )
 
@@ -320,6 +349,7 @@ def dump_ehb(path):
         convert_ehb_to_wom_format, modified_iron_entries
     )
     save_to(os.path.join(path, f"ironman.ehb.ts"), wom_formatted_iron, move=False)
+    save_to(os.path.join(path, f"uim.ehb.ts"), wom_formatted_iron, move=False)
 
     # Zero out any rates for f2p or lvl3
     lvl3_and_f2p_entries = [TempleEhbEntry(e.name, 0) for e in main_entries]
@@ -336,8 +366,16 @@ def dump_ehp(path):
     for name, url in EHP_PAGES.items():
         print(f"Dumping {name} EHP...")
         raw = fetch_page(url)
-        entries = parse_ehp_page(raw)
+        summary, entries = parse_ehp_page(raw)
         wom_formatted = convert_format(convert_ehp_to_wom_format, entries)
+        # add the maxBonus thing to the last bonus entry 
+        for skill in wom_formatted:
+            if skill["bonuses"]:
+                last_bonus = skill["bonuses"][-1]
+                bskill = last_bonus["bonusSkill"]
+                max_bonus = summary[bskill]["amountBxp"]
+                if max_bonus != 200_000_000 and bskill in ["fishing", "firemaking", "cooking", "smithing", "thieving"]:
+                    last_bonus["maxBonus"] = max_bonus
         save_to(os.path.join(path, f"{name}.ehp.ts"), wom_formatted)
 
 
