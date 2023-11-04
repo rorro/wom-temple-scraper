@@ -18,6 +18,8 @@ EHP_PAGES = {
     "uim": "https://templeosrs.com/efficiency/skilling.php?ehp=uim",
     "f2p": "https://templeosrs.com/efficiency/skilling.php?ehp=f2p",
     "lvl3": "https://templeosrs.com/efficiency/skilling.php?ehp=lvl3",
+    "f2p_ironman": "https://templeosrs.com/efficiency/skilling.php?ehp=f2pim",
+    "f2p_lvl3": "https://templeosrs.com/efficiency/skilling.php?ehp=f2plvl3"
 }
 
 EHB_PAGES = {
@@ -45,9 +47,9 @@ class WomFormatDumper:
             if not data:
                 return "[]"
             return (
-                " " * depth
-                + "[\n"
-                + ",\n".join([WomFormatDumper.dumps(d, depth + indent) for d in data])
+                "[\n"
+                + ",\n".join([WomFormatDumper.dumps(d, depth + indent)
+                             for d in data])
                 + " " * depth
                 + "\n]"
             )
@@ -71,6 +73,8 @@ class WomFormatDumper:
         elif isinstance(data, float):
             return f"{data:g}"
         elif isinstance(data, str):
+            if (data.startswith("Skill.")):
+                return data
             return "'" + data.replace("'", "\\'") + "'"
 
 
@@ -109,9 +113,10 @@ class TempleEhpEntry:
             data = row.findAll("td")
             if not data:
                 continue
-            xp, rate, description, bxp = data
+            level, xp, rate, description, bxp = data
             method = TempleEhpMethod(
-                to_int(xp.getText()), to_int(rate.getText()), description.getText()
+                to_int(xp.getText()), to_int(
+                    rate.getText()), description.getText()
             )
             method.parse_bxp(bxp)
             self.methods.append(method)
@@ -135,6 +140,10 @@ def pairwise(iterable):
     return zip_longest(a, b)
 
 
+def boss_sort_key(entry):
+    return entry.name.split('Boss.')[1]
+
+
 def save_to(path, info, move=True):
     dump = WomFormatDumper.dumps(info, move=move)
     if not move:
@@ -142,9 +151,13 @@ def save_to(path, info, move=True):
         # more compact format
         dump = dump.replace("\n", "")
 
+    dumping_ehp = "ehp" in path
     with open(path, "w") as file:
-        file.write("export default\n")
-        file.write(dump)
+        file.write(
+            "import { " + ("Skill" if dumping_ehp else "Boss") + " } from '../../../../../utils';\n\n")
+        file.write("export default ")
+        file.write(dump.replace("'", "").replace(
+            "\\", "") if not dumping_ehp else dump)
         file.write(";")
 
 
@@ -163,7 +176,8 @@ def get_args():
         help="the rate category to dump",
         choices=["ehp", "ehb", "misc"],
     )
-    parser.add_argument("path", action="store", help="the path to the output folder")
+    parser.add_argument("path", action="store",
+                        help="the path to the output folder")
 
     args = vars(parser.parse_args())
     return args
@@ -186,7 +200,6 @@ def parse_ehp_page(raw):
     summary = parse_summary_table(tables[0])
 
     for table in tables[1:]:
-
         if table.find("div", {"class": "news-post-container"}):
             # These are the More info+ description boxes
             continue
@@ -205,20 +218,25 @@ def parse_ehp_page(raw):
         entries.append(entry)
     return summary, entries
 
+
 def parse_summary_table(t):
-    summ  = {}
-    for row in t.findAll("tr")[1:]: #skip the table header, we know what is in the table
+    summ = {}
+    # skip the table header, we know what is in the table
+    for row in t.findAll("tr")[1:]:
         img, xp_left, amount_bxp, hours = row.findAll("td")
         skill = extract_skill_from_icon_path(img.find("img").get("src"))
         xp_left = to_int(xp_left.getText())
         amount_bxp = to_int(amount_bxp.getText())
-        hours = float(hours.getText().replace(",",""))
-        summ[skill] = {"xpLeft" : xp_left, "amountBxp": amount_bxp, "hours": hours}
+        hours = float(hours.getText().replace(",", ""))
+        summ[skill] = {"xpLeft": xp_left,
+                       "amountBxp": amount_bxp, "hours": hours}
     return summ
+
 
 def extract_skill_from_icon_path(path):
     n = path.split("_")[-1].split(".")[0].lower()
     return n if n != "runecraft" else "runecrafting"
+
 
 def parse_ehb_page(raw):
     soup = BeautifulSoup(raw, "html.parser")
@@ -230,29 +248,43 @@ def parse_ehb_page(raw):
             continue
         boss, killph, pet_rate, avg_pet_ehb = data
         name = boss.find("img").get("title").lower().replace(" ", "_")
-        name = convert_to_wom_name(name)
+        name = convert_boss_name(name)
         rate = float(killph.getText())
         entries.append(TempleEhbEntry(name, rate))
     return entries
+
+
+def convert_boss_name(name):
+    return "Boss." + convert_to_wom_name(name).upper().replace('-', '_')
+
 
 def convert_to_wom_name(name):
     if name == "the_nightmare":
         return "nightmare"
     if name == "theatre_of_blood_challenge_mode":
         return "theatre_of_blood_hard_mode"
+    if name == "chambers_of_xeric_challenge_mode":
+        return "chambers_of_xeric_cm"
     return name
+
 
 def parse_misc_page(raw):
     return parse_ehb_page(raw)
+
 
 def capitalize_first_letter(s):
     if s:
         return s[0].upper() + s[1:]
     return s
 
+
+def convert_skill_name(name):
+    return "Skill." + (name.upper() if name != "runecraft" else "RUNECRAFTING")
+
+
 def convert_ehp_to_wom_format(entry, entries):
     # Wom uses runecrafting :/
-    name = entry.name if entry.name != "runecraft" else "runecrafting"
+    name = convert_skill_name(entry.name)
     d = {"skill": name, "methods": [], "bonuses": []}
     sieve = defaultdict(list)
     saved_start = None
@@ -269,8 +301,8 @@ def convert_ehp_to_wom_format(entry, entries):
         # Adjacent bonuses need to be cleaned up
         ugly_bonuses = [
             {
-                "originSkill": entry.name,
-                "bonusSkill": bonus.skill,
+                "originSkill": convert_skill_name(entry.name),
+                "bonusSkill": convert_skill_name(bonus.skill),
                 "startExp": method.start_xp,
                 "endExp": next_method.start_xp
                 if next_method is not None
@@ -300,7 +332,7 @@ def convert_ehp_to_wom_format(entry, entries):
 
 
 def convert_ehb_to_wom_format(entry):
-    return {"boss": entry.name.replace("-", "_"), "rate": entry.rate}
+    return {"boss": entry.name, "rate": entry.rate}
 
 
 def account_for_not_updated_iron_ehb(main_entries, iron_entries):
@@ -335,20 +367,23 @@ def dump_ehb(path):
     # Grab rates for main and iron simultaneously since wee need to compare them
     # Only main rates are updated
     mainraw = fetch_page(EHB_PAGES["main"])
-    main_entries = parse_ehb_page(mainraw)
-    wom_formatted_main = convert_format(convert_ehb_to_wom_format, main_entries)
+    main_entries = sorted(parse_ehb_page(mainraw), key=boss_sort_key)
+    wom_formatted_main = convert_format(
+        convert_ehb_to_wom_format, main_entries)
     save_to(os.path.join(path, f"main.ehb.ts"), wom_formatted_main, move=False)
 
     ironraw = fetch_page(EHB_PAGES["ironman"])
     iron_entries = parse_ehb_page(ironraw)
 
     # Correct outdated rates because they are not actively used
-    modified_iron_entries = account_for_not_updated_iron_ehb(main_entries, iron_entries)
+    modified_iron_entries = sorted(account_for_not_updated_iron_ehb(
+        main_entries, iron_entries), key=boss_sort_key)
 
     wom_formatted_iron = convert_format(
-        convert_ehb_to_wom_format, modified_iron_entries
-    )
-    save_to(os.path.join(path, f"ironman.ehb.ts"), wom_formatted_iron, move=False)
+        convert_ehb_to_wom_format, modified_iron_entries)
+
+    save_to(os.path.join(path, f"ironman.ehb.ts"),
+            wom_formatted_iron, move=False)
     save_to(os.path.join(path, f"uim.ehb.ts"), wom_formatted_iron, move=False)
 
     # Zero out any rates for f2p or lvl3
@@ -368,12 +403,12 @@ def dump_ehp(path):
         raw = fetch_page(url)
         summary, entries = parse_ehp_page(raw)
         wom_formatted = convert_format(convert_ehp_to_wom_format, entries)
-        # add the maxBonus thing to the last bonus entry 
+        # add the maxBonus thing to the last bonus entry
         for skill in wom_formatted:
             if skill["bonuses"]:
                 last_bonus = skill["bonuses"][-1]
                 bskill = last_bonus["bonusSkill"]
-                max_bonus = summary[bskill]["amountBxp"]
+                max_bonus = summary[bskill.split('.')[1].lower()]["amountBxp"]
                 if max_bonus != 200_000_000 and bskill in ["fishing", "firemaking", "cooking", "smithing", "thieving"]:
                     last_bonus["maxBonus"] = max_bonus
         save_to(os.path.join(path, f"{name}.ehp.ts"), wom_formatted)
@@ -384,7 +419,8 @@ def dump_misc(path):
     main_entries = parse_misc_page(main_raw)
     wom_formatted = convert_format(convert_misc_to_wom_format, main_entries)
     for name in EHP_PAGES.keys():
-        save_to(os.path.join(path, f"{name}.ehp.ts"), wom_formatted, move=False)
+        save_to(os.path.join(path, f"{name}.ehp.ts"),
+                wom_formatted, move=False)
 
 
 def main():
