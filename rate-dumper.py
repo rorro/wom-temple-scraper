@@ -246,7 +246,7 @@ def parse_ehb_page(raw):
         data = row.findAll("td")
         if not data:
             continue
-        boss, killph, pet_rate, avg_pet_ehb = data
+        boss, killph, pet_rate, avg_pet_ehb, avg_gp_kill = data
         name = boss.find("img").get("title").lower().replace(" ", "_")
         name = convert_boss_name(name)
         rate = float(killph.getText())
